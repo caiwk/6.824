@@ -1,10 +1,21 @@
 package mapreduce
 
+import (
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	log "log_manager"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
 func doReduce(
 	jobName string, // the name of the whole MapReduce job
 	reduceTask int, // which reduce task this is
 	outFile string, // write the output here
-	nMap int, // the number of map tasks that were run ("M" in the paper)
+	nMap int,       // the number of map tasks that were run ("M" in the paper)
 	reduceF func(key string, values []string) string,
 ) {
 	//
@@ -44,4 +55,68 @@ func doReduce(
 	//
 	// Your code here (Part I).
 	//
+	infos, err := ioutil.ReadDir(".")
+	if err != nil{
+		log.Error(err)
+	}
+	var reduceNames []string
+	for _,v := range infos {
+		suffix:= fmt.Sprintf("%d",reduceTask)
+		if strings.HasSuffix(v.Name(),suffix) && strings.HasPrefix(v.Name(),"mrtmp.test"){
+			reduceNames = append(reduceNames,filepath.Join(".",v.Name()))
+			log.Info(v.Name())
+		}
+	}
+	var kvs []KeyValue
+
+	for _,name := range reduceNames{
+		fd, err := os.Open(name)
+		if err != nil {
+			log.Error(err)
+		}
+		dec := json.NewDecoder(fd)
+		if err != nil {
+			log.Error(err)
+		}
+		for {
+			var kv KeyValue
+			if err = dec.Decode(&kv); err != nil {
+				break
+			}
+			kvs = append(kvs, kv)
+		}
+		fd.Close()
+	}
+
+	sort.Sort(kvk(kvs))
+	log.Info(len(kvs))
+	out, err := os.Create(outFile)
+	if err != nil {
+		log.Error(err)
+	}
+	defer out.Close()
+	enc := json.NewEncoder(out)
+	var lk string
+	var val []string
+	for _, v := range kvs {
+		if len(val) != 0 {
+			if v.Key == lk {
+				val = append(val, v.Value)
+				continue
+			}
+			if err = enc.Encode(KeyValue{lk, reduceF(v.Key, val)}); err != nil {
+				log.Error(err)
+			}
+			lk = ""
+			val = val[:0]
+		}
+		val = append(val, v.Value)
+		lk = v.Key
+	}
+	if len(val) != 0 {
+		if err = enc.Encode(KeyValue{lk, reduceF(lk, val)}); err != nil {
+			log.Error(err)
+		}
+	}
+
 }

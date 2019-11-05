@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"bufio"
-	"log"
+	"log_manager"
 	"os"
 	"sort"
 	"strconv"
@@ -72,6 +72,7 @@ func check(t *testing.T, files []string) {
 		var v2 int
 		text := outputScanner.Text()
 		n, err := fmt.Sscanf(lines[i], "%d", &v1)
+
 		if n == 1 && err == nil {
 			n, err = fmt.Sscanf(text, "%d", &v2)
 		}
@@ -81,7 +82,7 @@ func check(t *testing.T, files []string) {
 		i++
 	}
 	if i != nNumber {
-		t.Fatalf("Expected %d lines in output\n", nNumber)
+		t.Fatalf("Expected %d lines in output %d \n", nNumber,i)
 	}
 }
 
@@ -149,6 +150,7 @@ func TestSequentialSingle(t *testing.T) {
 	check(t, mr.files)
 	checkWorker(t, mr.stats)
 	cleanup(mr)
+	log.Info("single ok")
 }
 
 func TestSequentialMany(t *testing.T) {
