@@ -60,11 +60,13 @@ func doReduce(
 		log.Error(err)
 	}
 	var reduceNames []string
+	//log.Info(len(infos))
+	prefix := fmt.Sprintf("mrtmp.%s",jobName)
 	for _,v := range infos {
 		suffix:= fmt.Sprintf("%d",reduceTask)
-		if strings.HasSuffix(v.Name(),suffix) && strings.HasPrefix(v.Name(),"mrtmp.test"){
+		if strings.HasSuffix(v.Name(),suffix) && strings.HasPrefix(v.Name(),prefix){
 			reduceNames = append(reduceNames,filepath.Join(".",v.Name()))
-			log.Info(v.Name())
+			//log.Info(v.Name())
 		}
 	}
 	var kvs []KeyValue
