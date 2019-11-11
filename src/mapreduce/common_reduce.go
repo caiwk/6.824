@@ -86,12 +86,13 @@ func doReduce(
 				break
 			}
 			kvs = append(kvs, kv)
+			//log.Info(kv,name )
 		}
 		fd.Close()
 	}
 
 	sort.Sort(kvk(kvs))
-	log.Info(len(kvs))
+	//log.Info(len(kvs))
 	out, err := os.Create(outFile)
 	if err != nil {
 		log.Error(err)
