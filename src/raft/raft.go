@@ -63,7 +63,7 @@ type Raft struct {
 	//persistent state on all servers
 	currentTerm uint64
 	votedFor    int
-	log         []byte
+	log         []interface{}
 	//volatile state on all servers
 	commitIndex uint64
 	lastApplid  uint64
@@ -170,6 +170,8 @@ func min(a uint64, b uint64) uint64 {
 	return b
 }
 func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	reply.Term = rf.currentTerm
 	rf.votedFor = -1
 	if args.Term < rf.currentTerm {
@@ -198,7 +200,8 @@ func (rf *Raft) resetTimeout() {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		reply.VoteGranted = false
@@ -243,13 +246,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply, res chan int) bool {
-	//log.Info("start send request vote from", rf.me," to ",server)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	//log.Info("get vote res from",server," to ",rf.me)
-	//if !ok{
-	//	log.Info(rf.me,"get vote from",server," fail")
-	//}
-
 	res <- server
 
 	return ok
@@ -279,7 +276,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.log = append(rf.log, command)
 	return index, term, isLeader
 }
 
@@ -290,6 +289,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // turn off debug output from this instance.
 //
 func (rf *Raft) Kill() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	// Your code here, if desired.
 	log.Info("kill", rf.me)
 	rf.setIsLeader(false)
@@ -350,8 +351,6 @@ func (rf *Raft) rpcHandleLoop() {
 	}
 }
 func (rf *Raft) setIsLeader(is bool) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	rf.isleader = is
 }
 func (rf *Raft) heartBeatLoop() {
@@ -380,7 +379,7 @@ func (rf *Raft) heartBeatLoop() {
 
 }
 func (rf *Raft) startElection() bool {
-
+	rf.mu.Lock()
 	rf.setIsLeader(false)
 	rf.currentTerm += 1
 	log.Info(rf.me, "start election", rf.currentTerm)
@@ -392,6 +391,7 @@ func (rf *Raft) startElection() bool {
 	}
 	replySlice := make([]*RequestVoteReply, len(rf.peers))
 	rf.votedFor = rf.me
+	rf.mu.Unlock()
 	rf.resetTimeout()
 	res := make(chan int, len(rf.peers)-1)
 	for k := range rf.peers {
@@ -400,21 +400,34 @@ func (rf *Raft) startElection() bool {
 			go rf.sendRequestVote(k, votereq, replySlice[k], res)
 		}
 	}
+	timeout := time.After(200 * time.Millisecond)
 	total := 0
 	Grantcount := 0
-	for i := range res {
-		total++
-		if replySlice[i].VoteGranted {
-			Grantcount++
-		}
-		if Grantcount+1 > len(rf.peers)/2 {
-			return true
-		}
-		if total == len(rf.peers)-1 {
+	for {
+		select {
+		case <- timeout:
+			rf.mu.Lock()
 			rf.votedFor = -1
-			return false
+			rf.mu.Unlock()
+			return  false
+		case i := <- res:
+			total++
+			if replySlice[i].VoteGranted {
+				Grantcount++
+			}
+			if Grantcount+1 > len(rf.peers)/2 {
+				if rf.votedFor == rf.me{
+					return true
+				}
+				return false
+			}
+			if total == len(rf.peers)-1 {
+				rf.mu.Lock()
+				rf.votedFor = -1
+				rf.mu.Unlock()
+				return false
+			}
 		}
 	}
-	return false
 
 }
