@@ -8,7 +8,10 @@ package raft
 // test with the original before submitting.
 //
 
-import "testing"
+import (
+	log "log_manager"
+	"testing"
+)
 import "fmt"
 import "time"
 import "math/rand"
@@ -117,6 +120,7 @@ func TestFailAgree2B(t *testing.T) {
 
 	// follower network disconnection
 	leader := cfg.checkOneLeader()
+	log.Info("1")
 	cfg.disconnect((leader + 1) % servers)
 
 	// agree despite one disconnected server?
@@ -127,6 +131,7 @@ func TestFailAgree2B(t *testing.T) {
 	cfg.one(105, servers-1, false)
 
 	// re-connect
+	log.Info("2")
 	cfg.connect((leader + 1) % servers)
 
 	// agree with full set of servers?
