@@ -56,6 +56,7 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+	bclock sync.Mutex
 	applyCh      chan ApplyMsg
 	entryCh      chan bool
 	timeout      chan bool
@@ -223,6 +224,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.shutdownCh = make(chan bool, 1)
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.isLostLeader = true
+	rf.commitIndex = 0
+	rf.bclock = sync.Mutex{}
 	// Your initialization code here (2A, 2B, 2C).
 	go rf.rpcHandleLoop()
 	// initialize from state persisted before a crash

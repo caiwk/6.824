@@ -21,29 +21,41 @@ func (rf *Raft) heartBeatLoop() {
 	}
 }
 func (rf *Raft) broadcast(heart bool ) {
+	rf.bclock.Lock()
+	defer rf.bclock.Unlock()
 	if _, bo := rf.GetState(); !bo  {
 		return
 	}
 	ch := make(chan int, len(rf.peers) - 1)
 	replySlice := make([]*AppendEntriesReply, len(rf.peers))
+	rf.mu.Lock()
+	lastLogIndex := rf.lastLogIndex()
 	for k := range rf.peers {
 		if rf.me != k {
 			replySlice[k] = new(AppendEntriesReply)
-			go rf.sendAppendEntries(k, replySlice[k],ch)
+			go rf.sendAppendEntries(k, replySlice[k],ch,lastLogIndex)
+			//这里有一个bug，现在的log在gather的时候已经变了，gather更新commitindex把最新的log都commit了，
+			//是错误的
 		}
 	}
+	rf.mu.Unlock()
 	rf.resetTimeout()
 	if !heart && gather(200, replySlice, len(rf.peers), len(rf.peers)/2, ch) {
-		rf.commitIndex = rf.lastLog().Index
-		log.Info(rf.me,"apply",rf.log[rf.lastLogIndex() - 1].Cmd)
-		rf.applyCh <- ApplyMsg{
-			CommandValid: true,
-			Command:      rf.lastLog().Cmd,
-			CommandIndex: rf.lastLog().Index,
+			old := rf.commitIndex
+			rf.mu.Lock()
+			rf.commitIndex = lastLogIndex
+			rf.mu.Unlock()
+			for i := old; i < rf.commitIndex; i ++ {
+				log.Info(rf.me,"apply",rf.log[i].Cmd, " commit index : ", rf.commitIndex)
+				rf.applyCh <- ApplyMsg{
+					CommandValid: true,
+					Command:      rf.log[i].Cmd,
+					CommandIndex: rf.log[i].Index,
+			}
 		}
 	}
 }
-func (rf *Raft) newAppendEntries(server int) *AppendEntries {
+func (rf *Raft) newAppendEntries(server int,lastIndex int) *AppendEntries {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	args := &AppendEntries{
@@ -55,8 +67,9 @@ func (rf *Raft) newAppendEntries(server int) *AppendEntries {
 	if args.PrevLogIndex > 0{
 		args.PrevLogTerm = rf.log[args.PrevLogIndex - 1].Term
 	}
-	if rf.nextIndex[server]  <= len(rf.log){
-		args.Entries = rf.log[rf.nextIndex[server]-1:]
+	if rf.nextIndex[server]  <= len(rf.log) &&lastIndex >= 0 &&  lastIndex <= len(rf.log){
+		//log.Infof("%d, %d , %d  ",len(rf.log), lastIndex,rf.nextIndex[server]-1)
+		args.Entries = rf.log[rf.nextIndex[server] - 1:lastIndex]
 	}
 	return args
 }

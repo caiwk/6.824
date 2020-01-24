@@ -1,7 +1,7 @@
 package raft
 
 import (
-	log "log_manager"
+	"log_manager"
 	"time"
 )
 
@@ -41,20 +41,29 @@ func (r AppendEntriesReply) Success() bool {
 func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if args.PrevLogIndex > 0 && len(args.Entries) > 0{
-		log.Infof("server: %d , get append entris, preindex: %d, preterm: %d , my log_last_index : %d , last_term: %d  ",
-			rf.me, args.PrevLogIndex, args.PrevLogTerm, rf.log[len(rf.log)-1].Index, rf.log[len(rf.log)-1].Term)
+	if len(args.Entries) > 0 {
+		if args.PrevLogIndex > 0 {
+			log.Infof("server: %d , get append entris, preindex: %d, preterm: %d , my log_last_index : %d , last_term: %d  ",
+				rf.me, args.PrevLogIndex, args.PrevLogTerm, rf.log[len(rf.log)-1].Index, rf.log[len(rf.log)-1].Term)
+		}else{
+			log.Infof("server: %d , get append entris, preindex: %d, preterm: %d   ",
+				rf.me, args.PrevLogIndex, args.PrevLogTerm)
+		}
 	}
-
+	//if len(args.Entries) == 0 {
+	//	log.Infof("%d , leader's commit index: %d, my commit index: %d" ,
+	//		rf.me, args.LeaderCommit, rf.commitIndex)
+	//}
 	reply.Term = rf.currentTerm
 	rf.votedFor = -1
 	if args.Term < rf.currentTerm {
 		reply.Succes = false
+		log.Info("args.s term less than me", rf.me)
 		return
 	}
 	rf.setIsLeader(false)
 	if args.PrevLogIndex > 0 {
-		if args.PrevLogIndex > len(rf.log)|| rf.log[args.PrevLogIndex-1].Index != args.PrevLogIndex {
+		if args.PrevLogIndex > len(rf.log) || rf.log[args.PrevLogIndex-1].Index != args.PrevLogIndex {
 			reply.Succes = false
 			reply.Inconsistent = true
 			log.Info("inconsistent", rf.me, args.PrevLogIndex)
@@ -67,23 +76,28 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 		}
 	}
 	rf.resetTimeout()
-	if len(args.Entries) == 0 {
-		return
-	}
+
 	reply.Succes = true
 	rf.isLostLeader = false
-
-
+	//if len(args.Entries) == 0 {
+	//	return
+	//}
 	rf.log = append(rf.log[:args.PrevLogIndex], args.Entries...)
+	// 更新自己的rf.commit,并apply
+	old := rf.commitIndex
+	if old == 0 {
+		old = 1
+	}
 	if args.LeaderCommit > rf.commitIndex {
 		rf.commitIndex = min(args.LeaderCommit, rf.log[len(rf.log)-1].Index)
 	}
-	for k := range args.Entries {
-		log.Info(rf.me,"apply",args.Entries[k].Cmd)
+	for i := old - 1 ; i >= 0 && i < rf.commitIndex; i ++ {
+		ent := rf.log[i]
+		log.Info(rf.me, "apply", ent.Cmd)
 		rf.applyCh <- ApplyMsg{
 			CommandValid: true,
-			Command:      args.Entries[k].Cmd,
-			CommandIndex: args.Entries[k].Index,
+			Command:      ent.Cmd,
+			CommandIndex: ent.Index,
 		}
 	}
 	return
@@ -176,24 +190,21 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	res <- server
 	return ok
 }
-func (rf *Raft) sendAppendEntries(server int, reply *AppendEntriesReply, ch chan int) bool {
-	args := rf.newAppendEntries(server)
+func (rf *Raft) sendAppendEntries(server int, reply *AppendEntriesReply, ch chan int,lastIndex int) bool {
+	args := rf.newAppendEntries(server,lastIndex)
 	var ok bool
-	//rf.mu.Lock()
-	//if len(args.Entries) != 0 && rf.nextIndex[server] != args.Entries[0].Index {
-	//	args.Entries = rf.log[rf.nextIndex[server]-1:]
-	//	args.PrevLogIndex = args.Entries[0].Index - 1
-	//}
-	//rf.mu.Unlock()
 	for {
-		if len(args.Entries) != 0{
-			log.Infof( "%d start send append entry to %d, index: %d , length : %d",
-				rf.me,server,args.Entries[0].Index, len(args.Entries))
+		if len(args.Entries) != 0 {
+			log.Infof("%d start send append entry to %d, index: %d , length : %d",
+				rf.me, server, args.Entries[0].Index, len(args.Entries))
+			//for _,v := range args.Entries{
+			//	log.Infof("%d send to %d , cmd : %d ", rf.me, server, v.Cmd)
+			//}
 		}
 
 		ok = rf.peers[server].Call("Raft.AppendEntries", args, reply)
 		if reply.Inconsistent {
-			log.Info("get inconsistent res from" , server)
+			log.Info("get inconsistent res from", server)
 			rf.mu.Lock()
 			rf.nextIndex[server] -= 1
 			rf.mu.Unlock()
@@ -203,9 +214,9 @@ func (rf *Raft) sendAppendEntries(server int, reply *AppendEntriesReply, ch chan
 			args.Entries = rf.log[rf.nextIndex[server]-1:]
 			args.PrevLogIndex = args.Entries[0].Index - 1
 		} else {
-			if reply.Succes {
+			if reply.Succes && len(args.Entries) > 0  {
 				rf.mu.Lock()
-				rf.nextIndex[server] = len(rf.log) + 1
+				rf.nextIndex[server] = lastIndex + 1
 				rf.mu.Unlock()
 			}
 			break
