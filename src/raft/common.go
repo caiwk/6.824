@@ -17,7 +17,7 @@ func (rf *Raft) lastLogIndex() int  {
 	if len(rf.log) > 0{
 		return rf.log[len(rf.log) - 1 ].Index
 	}
-	return -1
+	return 0
 }
 func (rf *Raft) lastLog() *Entry {
 	rf.mu.Lock()

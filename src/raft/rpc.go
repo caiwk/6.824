@@ -71,7 +71,8 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 		}
 		if rf.log[args.PrevLogIndex-1].Term != args.PrevLogTerm {
 			reply.Succes = false
-			log.Info("refuse")
+			reply.Inconsistent = true
+			log.Info(rf.me,"refuse")
 			return
 		}
 	}
@@ -89,6 +90,7 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 		old = 1
 	}
 	if args.LeaderCommit > rf.commitIndex {
+		//log.Info(args.LeaderCommit,rf.commitIndex, len(rf.log))
 		rf.commitIndex = min(args.LeaderCommit, rf.log[len(rf.log)-1].Index)
 	}
 	for i := old - 1 ; i >= 0 && i < rf.commitIndex; i ++ {
@@ -100,6 +102,7 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 			CommandIndex: ent.Index,
 		}
 	}
+	reply.Inconsistent = false
 	return
 }
 func (rf *Raft) resetTimeout() {
@@ -141,7 +144,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = true
 		rf.resetTimeout()
 	}
-	//log.Info(rf.me, " return ", reply.VoteGranted, args.CandidateId, rf.votedFor, args.Term, rf.currentTerm)
+	log.Info(rf.votedFor,args.LastLogIndex ,rf.commitIndex)
+	log.Info(rf.me, " return ", reply.VoteGranted, args.CandidateId, rf.votedFor, args.Term, rf.currentTerm)
 }
 
 //
@@ -203,8 +207,8 @@ func (rf *Raft) sendAppendEntries(server int, reply *AppendEntriesReply, ch chan
 		}
 
 		ok = rf.peers[server].Call("Raft.AppendEntries", args, reply)
-		if reply.Inconsistent {
-			log.Info("get inconsistent res from", server)
+		if !reply.Succes && reply.Inconsistent {
+			log.Info(rf.me, "get inconsistent res from", server)
 			rf.mu.Lock()
 			rf.nextIndex[server] -= 1
 			rf.mu.Unlock()
@@ -216,7 +220,7 @@ func (rf *Raft) sendAppendEntries(server int, reply *AppendEntriesReply, ch chan
 		} else {
 			if reply.Succes && len(args.Entries) > 0  {
 				rf.mu.Lock()
-				rf.nextIndex[server] = lastIndex + 1
+				rf.nextIndex[server] = args.Entries[len(args.Entries)- 1].Index + 1
 				rf.mu.Unlock()
 			}
 			break
