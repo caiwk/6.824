@@ -8,11 +8,11 @@ package raft
 // rf = Make(...)
 //   create a new Raft server.
 // rf.Start(command interface{}) (index, term, isleader)
-//   start agreement on a new log entry
+//   start agreement on a new Log entry
 // rf.GetState() (term, isLeader)
 //   ask a Raft for its current term, and whether it thinks it is leader
 // ApplyMsg
-//   each time a new entry is committed to the log, each Raft peer
+//   each time a new entry is committed to the Log, each Raft peer
 //   should send an ApplyMsg to the service (or tester)
 //   in the same server.
 //
@@ -23,17 +23,21 @@ import (
 	"sync"
 	"time"
 )
-import "labrpc"
+import (
+	"labrpc"
+	"bytes"
+	"labgob"
+)
 
 // import "bytes"
 // import "labgob"
 
 //
-// as each Raft peer becomes aware that successive log entries are
+// as each Raft peer becomes aware that successive Log entries are
 // committed, the peer should send an ApplyMsg to the service (or
 // tester) on the same server, via the applyCh passed to Make(). set
 // CommandValid to true to indicate that the ApplyMsg contains a newly
-// committed log entry.
+// committed Log entry.
 //
 // in Lab 3 you'll want to send other kinds of messages (e.g.,
 // snapshots) on the applyCh; at that point you can add fields to
@@ -64,9 +68,9 @@ type Raft struct {
 	isLostLeader bool
 	shutdownCh   chan bool
 	//persistent state on all servers
-	currentTerm int
-	votedFor    int
-	log         []*Entry
+	CurrentTerm int
+	VoteFor     int
+	Log         []*Entry
 	//volatile state on all servers
 	commitIndex int
 	lastApplid  int
@@ -74,19 +78,18 @@ type Raft struct {
 	nextIndex  []int
 	matchIndex []int
 }
-
 func (rf *Raft) IsLeader() bool {
 	return rf.isleader
 }
 
-// return currentTerm and whether this server
+// return CurrentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 
 	var term int
 	//var isleader bool
 	// Your code here (2A).
-	term = int(rf.currentTerm)
+	term = int(rf.CurrentTerm)
 
 	return term, rf.IsLeader()
 }
@@ -99,12 +102,15 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	rf.mu.Lock()
+	rf.mu.Unlock()
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.CurrentTerm)
+	e.Encode(rf.VoteFor)
+	e.Encode(rf.Log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -114,19 +120,21 @@ func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
-	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	//Your code here (2C).
+	//Example:
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var term int
+	var voteFor int
+	var logs []*Entry
+	if d.Decode(&term) != nil ||
+	   d.Decode(&voteFor) != nil|| d.Decode(&logs) != nil {
+	  log.Error("read persist decode err")
+	} else {
+	  rf.CurrentTerm = term
+	  rf.VoteFor = voteFor
+	  rf.Log = logs
+	}
 }
 
 //
@@ -149,10 +157,10 @@ type Entry struct {
 
 //
 // the service using Raft (e.g. a k/v server) wants to start
-// agreement on the next command to be appended to Raft's log. if this
+// agreement on the next command to be appended to Raft's Log. if this
 // server isn't the leader, returns false. otherwise start the
 // agreement and return immediately. there is no guarantee that this
-// command will ever be committed to the Raft log, since the leader
+// command will ever be committed to the Raft Log, since the leader
 // may fail or lose an election. even if the Raft instance has been killed,
 // this function should return gracefully.
 //
@@ -167,6 +175,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//isLeader := true
 
 	// Your code here (2B).
+	defer rf.persist()
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -176,12 +185,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	log.Info(rf.me, "start", command)
 	ent := &Entry{
 		Cmd:   command,
-		Term:  rf.currentTerm,
-		Index: len(rf.log) + 1,
+		Term:  rf.CurrentTerm,
+		Index: len(rf.Log) + 1,
 	}
-	rf.log = append(rf.log, ent)
+	rf.Log = append(rf.Log, ent)
 	rf.entryCh <- true
-	return len(rf.log), rf.currentTerm, rf.isleader
+	return len(rf.Log), rf.CurrentTerm, rf.isleader
 }
 
 //
@@ -194,7 +203,7 @@ func (rf *Raft) Kill() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// Your code here, if desired.
-	//log.Info("kill", rf.me)
+	//Log.Info("kill", rf.me)
 	rf.setIsLeader(false)
 	close(rf.shutdownCh)
 }
@@ -217,9 +226,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.timeout = make(chan bool, 10)
-	rf.votedFor = -1
+	rf.VoteFor = -1
 	rf.entryCh = make(chan bool, 1)
-	rf.log = make([]*Entry, 0, 8)
+	rf.Log = make([]*Entry, 0, 8)
 	rf.applyCh = applyCh
 	rf.shutdownCh = make(chan bool, 1)
 	rf.nextIndex = make([]int, len(rf.peers))

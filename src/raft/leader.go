@@ -30,6 +30,7 @@ func (rf *Raft) broadcast(heart bool) {
 	replySlice := make([]*AppendEntriesReply, len(rf.peers))
 	rf.mu.Lock()
 	lastLogIndex := rf.lastLogIndex()
+	log.Info(rf.me, lastLogIndex)
 	for k := range rf.peers {
 		if rf.me != k {
 			replySlice[k] = new(AppendEntriesReply)
@@ -45,11 +46,11 @@ func (rf *Raft) broadcast(heart bool) {
 		rf.commitIndex = lastLogIndex
 		rf.mu.Unlock()
 		for i := old; i < rf.commitIndex; i ++ {
-			log.Info(rf.me, "apply", rf.log[i].Cmd, " commit index : ", rf.commitIndex)
+			log.Info(rf.me, "apply", rf.Log[i].Cmd, " commit index : ", rf.commitIndex)
 			rf.applyCh <- ApplyMsg{
 				CommandValid: true,
-				Command:      rf.log[i].Cmd,
-				CommandIndex: rf.log[i].Index,
+				Command:      rf.Log[i].Cmd,
+				CommandIndex: rf.Log[i].Index,
 			}
 		}
 	}
@@ -58,17 +59,17 @@ func (rf *Raft) newAppendEntries(server int, lastIndex int) *AppendEntries {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	args := &AppendEntries{
-		Term:         rf.currentTerm,
+		Term:         rf.CurrentTerm,
 		LeaderId:     rf.me,
 		PrevLogIndex: rf.nextIndex[server] - 1,
 		LeaderCommit: rf.commitIndex,
 	}
 	if args.PrevLogIndex > 0 {
-		args.PrevLogTerm = rf.log[args.PrevLogIndex-1].Term
+		args.PrevLogTerm = rf.Log[args.PrevLogIndex-1].Term
 	}
-	if rf.nextIndex[server] <= len(rf.log) && lastIndex >= 0 && lastIndex <= len(rf.log) {
-		log.Infof("send to %d , %d, %d , %d  ",server, len(rf.log), lastIndex,rf.nextIndex[server]-1)
-		args.Entries = rf.log[rf.nextIndex[server]-1 : lastIndex]
+	if rf.nextIndex[server] <= len(rf.Log) && lastIndex >= 0 && lastIndex <= len(rf.Log) {
+		//log.Infof("send to %d , %d, %d , %d  ",server, len(rf.Log), lastIndex,rf.nextIndex[server]-1)
+		args.Entries = rf.Log[rf.nextIndex[server]-1 : lastIndex]
 	}
 	return args
 }
@@ -77,16 +78,17 @@ func (rf *Raft) startPreVote() bool {
 	rf.mu.Lock()
 	rf.isLostLeader = true
 	rf.setIsLeader(false)
-	rf.votedFor = -1
-	log.Info(rf.me, "start prevote", rf.currentTerm)
+	rf.VoteFor = -1
+	rf.mu.Unlock()
+	log.Info(rf.me, "start prevote", rf.CurrentTerm)
 	votereq := &RequestVoteArgs{
-		Term:         rf.currentTerm,
+		Term:         rf.CurrentTerm,
 		CandidateId:  rf.me,
-		LastLogIndex: rf.commitIndex,
-		LastLogTerm:  rf.currentTerm,
+		LastLogIndex: rf.lastLogIndex(),
+		LastLogTerm:  rf.CurrentTerm,
 	}
 	replySlice := make([]*RequestVoteReply, len(rf.peers))
-	rf.mu.Unlock()
+
 	rf.resetTimeout()
 	res := make(chan int, len(rf.peers)-1)
 	for k := range rf.peers {
@@ -100,22 +102,27 @@ func (rf *Raft) startPreVote() bool {
 	}
 	return false
 }
-func (rf *Raft) startElection() bool {
+func (rf *Raft) startElection() (is bool) {
+	defer func() {
+		if is {
+			rf.persist()
+		}
+	}()
 	if !rf.startPreVote() {
 		return false
 	}
 	rf.mu.Lock()
 	rf.setIsLeader(false)
-	rf.currentTerm += 1
-	log.Info(rf.me, "start election", rf.currentTerm)
+	rf.CurrentTerm += 1
+	log.Info(rf.me, "start election", rf.CurrentTerm)
 	votereq := &RequestVoteArgs{
-		Term:         rf.currentTerm,
+		Term:         rf.CurrentTerm,
 		CandidateId:  rf.me,
-		LastLogIndex: rf.commitIndex,
-		LastLogTerm:  rf.currentTerm,
+		LastLogIndex: rf.lastLogIndex(),
+		LastLogTerm:  rf.CurrentTerm,
 	}
 	replySlice := make([]*RequestVoteReply, len(rf.peers))
-	rf.votedFor = rf.me
+	rf.VoteFor = rf.me
 	rf.mu.Unlock()
 	rf.resetTimeout()
 	res := make(chan int, len(rf.peers)-1)
@@ -126,13 +133,13 @@ func (rf *Raft) startElection() bool {
 		}
 	}
 	if gather(200, replySlice, len(rf.peers), len(rf.peers)/2, res) {
-		if rf.votedFor == rf.me {
+		if rf.VoteFor == rf.me {
 			return true
 		}
 		return false
 	}
 	rf.mu.Lock()
-	rf.votedFor = -1
+	rf.VoteFor = -1
 	rf.mu.Unlock()
 	log.Info("start election return false")
 	return false
@@ -142,6 +149,6 @@ func (rf *Raft) initNextIndex() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	for k := range rf.nextIndex {
-		rf.nextIndex[k] = len(rf.log) + 1
+		rf.nextIndex[k] = len(rf.Log) + 1
 	}
 }

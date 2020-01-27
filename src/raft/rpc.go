@@ -39,37 +39,38 @@ func (r AppendEntriesReply) Success() bool {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
+	defer rf.persist()
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if len(args.Entries) > 0 {
 		if args.PrevLogIndex > 0 {
-			log.Infof("server: %d , get append entris, preindex: %d, preterm: %d , my log_last_index : %d , last_term: %d  ",
-				rf.me, args.PrevLogIndex, args.PrevLogTerm, rf.log[len(rf.log)-1].Index, rf.log[len(rf.log)-1].Term)
+			//log.Infof("server: %d , get append entris, preindex: %d, preterm: %d , my log_last_index : %d , last_term: %d  ",
+			//	rf.me, args.PrevLogIndex, args.PrevLogTerm, rf.Log[len(rf.Log)-1].Index, rf.Log[len(rf.Log)-1].Term)
 		}else{
-			log.Infof("server: %d , get append entris, preindex: %d, preterm: %d   ",
-				rf.me, args.PrevLogIndex, args.PrevLogTerm)
+			//log.Infof("server: %d , get append entris, preindex: %d, preterm: %d   ",
+			//	rf.me, args.PrevLogIndex, args.PrevLogTerm)
 		}
 	}
 	//if len(args.Entries) == 0 {
-	//	log.Infof("%d , leader's commit index: %d, my commit index: %d" ,
+	//	Log.Infof("%d , leader's commit index: %d, my commit index: %d" ,
 	//		rf.me, args.LeaderCommit, rf.commitIndex)
 	//}
-	reply.Term = rf.currentTerm
-	rf.votedFor = -1
-	if args.Term < rf.currentTerm {
+	reply.Term = rf.CurrentTerm
+	rf.VoteFor = -1
+	if args.Term < rf.CurrentTerm {
 		reply.Succes = false
 		log.Info("args.s term less than me", rf.me)
 		return
 	}
 	rf.setIsLeader(false)
 	if args.PrevLogIndex > 0 {
-		if args.PrevLogIndex > len(rf.log) || rf.log[args.PrevLogIndex-1].Index != args.PrevLogIndex {
+		if args.PrevLogIndex > len(rf.Log) || rf.Log[args.PrevLogIndex-1].Index != args.PrevLogIndex {
 			reply.Succes = false
 			reply.Inconsistent = true
 			log.Info("inconsistent", rf.me, args.PrevLogIndex)
 			return
 		}
-		if rf.log[args.PrevLogIndex-1].Term != args.PrevLogTerm {
+		if rf.Log[args.PrevLogIndex-1].Term != args.PrevLogTerm {
 			reply.Succes = false
 			reply.Inconsistent = true
 			log.Info(rf.me,"refuse")
@@ -83,18 +84,18 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 	//if len(args.Entries) == 0 {
 	//	return
 	//}
-	rf.log = append(rf.log[:args.PrevLogIndex], args.Entries...)
+	rf.Log = append(rf.Log[:args.PrevLogIndex], args.Entries...)
 	// 更新自己的rf.commit,并apply
 	old := rf.commitIndex
 	if old == 0 {
 		old = 1
 	}
 	if args.LeaderCommit > rf.commitIndex {
-		//log.Info(args.LeaderCommit,rf.commitIndex, len(rf.log))
-		rf.commitIndex = min(args.LeaderCommit, rf.log[len(rf.log)-1].Index)
+		//Log.Info(args.LeaderCommit,rf.commitIndex, len(rf.Log))
+		rf.commitIndex = min(args.LeaderCommit, rf.Log[len(rf.Log)-1].Index)
 	}
 	for i := old - 1 ; i >= 0 && i < rf.commitIndex; i ++ {
-		ent := rf.log[i]
+		ent := rf.Log[i]
 		log.Info(rf.me, "apply", ent.Cmd)
 		rf.applyCh <- ApplyMsg{
 			CommandValid: true,
@@ -115,12 +116,12 @@ func (rf *Raft) PreVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.resetTimeout()
-	//log.Info(" %d get prevote req, ")
+	log.Infof(" %d get prevote req from %d ,%d, %d ",rf.me, args.CandidateId,args.LastLogIndex,rf.lastLogIndex())
 	if !rf.isLostLeader {
 		reply.VoteGranted = false
 		return
 	}
-	if args.Term >= rf.currentTerm || args.LastLogIndex >= rf.lastLogIndex() {
+	if args.Term > rf.CurrentTerm || args.LastLogIndex >= rf.lastLogIndex() {
 		reply.VoteGranted = true
 	}
 	return
@@ -131,21 +132,25 @@ func (rf *Raft) PreVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	defer func() {
+		if reply.VoteGranted{
+			rf.persist()
+		}
+	}()
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	reply.Term = rf.currentTerm
-	if args.Term < rf.currentTerm {
+	reply.Term = rf.CurrentTerm
+	if args.Term < rf.CurrentTerm {
 		reply.VoteGranted = false
 	}
-	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && args.Term > rf.currentTerm && args.LastLogIndex >= rf.commitIndex {
+	if (rf.VoteFor == -1 || rf.VoteFor == args.CandidateId) && args.Term > rf.CurrentTerm && args.LastLogIndex >= rf.lastLogIndex() {
 		rf.setIsLeader(false)
-		rf.votedFor = args.CandidateId
-		rf.currentTerm = args.Term
+		rf.VoteFor = args.CandidateId
+		rf.CurrentTerm = args.Term
 		reply.VoteGranted = true
 		rf.resetTimeout()
 	}
-	log.Info(rf.votedFor,args.LastLogIndex ,rf.commitIndex)
-	log.Info(rf.me, " return ", reply.VoteGranted, args.CandidateId, rf.votedFor, args.Term, rf.currentTerm)
+	log.Info(rf.me, " return ", reply.VoteGranted, args.CandidateId, rf.VoteFor, args.Term, rf.CurrentTerm,args.LastLogIndex, rf.lastLogIndex())
 }
 
 //
@@ -199,10 +204,10 @@ func (rf *Raft) sendAppendEntries(server int, reply *AppendEntriesReply, ch chan
 	var ok bool
 	for {
 		if len(args.Entries) != 0 {
-			log.Infof("%d start send append entry to %d, index: %d , length : %d",
-				rf.me, server, args.Entries[0].Index, len(args.Entries))
+			//log.Infof("%d start send append entry to %d, index: %d , length : %d",
+			//	rf.me, server, args.Entries[0].Index, len(args.Entries))
 			//for _,v := range args.Entries{
-			//	log.Infof("%d send to %d , cmd : %d ", rf.me, server, v.Cmd)
+			//	Log.Infof("%d send to %d , cmd : %d ", rf.me, server, v.Cmd)
 			//}
 		}
 
@@ -215,7 +220,7 @@ func (rf *Raft) sendAppendEntries(server int, reply *AppendEntriesReply, ch chan
 			if rf.nextIndex[server] < 1 {
 				break
 			}
-			args.Entries = rf.log[rf.nextIndex[server]-1:]
+			args.Entries = rf.Log[rf.nextIndex[server]-1:]
 			args.PrevLogIndex = args.Entries[0].Index - 1
 		} else {
 			if reply.Succes && len(args.Entries) > 0  {

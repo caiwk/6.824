@@ -355,7 +355,7 @@ func (cfg *config) checkNoLeader() {
 	}
 }
 
-// how many servers think a log entry is committed?
+// how many servers think a Log entry is committed?
 func (cfg *config) nCommitted(index int) (int, interface{}) {
 	count := 0
 	cmd := -1
@@ -366,7 +366,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 
 		cfg.mu.Lock()
 		cmd1, ok := cfg.logs[i][index]
-		//log.Println(i,index, len(cfg.logs[i]), ok)
+		//Log.Println(i,index, len(cfg.logs[i]), ok)
 		cfg.mu.Unlock()
 
 		if ok {
@@ -460,7 +460,7 @@ func (cfg *config) one(cmd int, expectedServers int, retry bool) int {
 						return index
 					}
 				}
-				//log.Println(cmd1.(int),nd)
+				//Log.Println(cmd1.(int),nd)
 				time.Sleep(20 * time.Millisecond)
 			}
 			if retry == false {
