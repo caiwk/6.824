@@ -246,7 +246,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 func (rf *Raft) rpcHandleLoop() {
 	for {
 
-		timeout := rand.Intn(100) + 200 // 300ms ~ 500ms
+		timeout := rand.Intn(100) + 400 // 300ms ~ 500ms
 
 		select {
 		case <-rf.shutdownCh:

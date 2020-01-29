@@ -63,11 +63,13 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 		return
 	}
 	rf.setIsLeader(false)
+	rf.resetTimeout()
+	rf.CurrentTerm = args.Term
 	if args.PrevLogIndex > 0 {
 		if args.PrevLogIndex > len(rf.Log) || rf.Log[args.PrevLogIndex-1].Index != args.PrevLogIndex {
 			reply.Succes = false
 			reply.Inconsistent = true
-			log.Info("inconsistent", rf.me, args.PrevLogIndex)
+			log.Info(rf.me,"inconsistent",  args.PrevLogIndex,len(rf.Log))
 			return
 		}
 		if rf.Log[args.PrevLogIndex-1].Term != args.PrevLogTerm {
@@ -76,8 +78,14 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 			log.Info(rf.me,"refuse")
 			return
 		}
+		//由于每次append entry req都是发送nextindex到leader 最新log，所以在网络延迟的情况下
+		//会出现append req里面的log已经commit的情况，对于这种情况，应该drop掉
+		if args.PrevLogIndex + len(args.Entries) <= rf.commitIndex{
+			//log.Info(rf.me," get obsolete append req , abandon it ")
+			reply.Succes = true
+			return
+		}
 	}
-	rf.resetTimeout()
 
 	reply.Succes = true
 	rf.isLostLeader = false
@@ -91,12 +99,12 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 		old = 1
 	}
 	if args.LeaderCommit > rf.commitIndex {
-		//Log.Info(args.LeaderCommit,rf.commitIndex, len(rf.Log))
+		//log.Info(rf.me,args.LeaderCommit,rf.commitIndex, len(rf.Log),rf.Log[len(rf.Log)-1].Index)
 		rf.commitIndex = min(args.LeaderCommit, rf.Log[len(rf.Log)-1].Index)
 	}
 	for i := old - 1 ; i >= 0 && i < rf.commitIndex; i ++ {
+		log.Info(rf.me, "apply",  "my commmitIndex :",rf.commitIndex,"log length:", len(rf.Log))
 		ent := rf.Log[i]
-		log.Info(rf.me, "apply", ent.Cmd)
 		rf.applyCh <- ApplyMsg{
 			CommandValid: true,
 			Command:      ent.Cmd,
@@ -111,19 +119,31 @@ func (rf *Raft) resetTimeout() {
 		rf.timeout <- true
 	}()
 }
+func (rf *Raft) lastLogTerm() int {
+	if rf.lastLogIndex() > 0{
+		return rf.lastLog().Term
+	}else {
+		return 0
+	}
 
+}
 func (rf *Raft) PreVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.resetTimeout()
-	log.Infof(" %d get prevote req from %d ,%d, %d ",rf.me, args.CandidateId,args.LastLogIndex,rf.lastLogIndex())
 	if !rf.isLostLeader {
 		reply.VoteGranted = false
 		return
 	}
-	if args.Term > rf.CurrentTerm || args.LastLogIndex >= rf.lastLogIndex() {
+	if  (rf.lastLogTerm() == args.LastLogTerm&& args.LastLogIndex >= rf.lastLogIndex()) ||
+		rf.lastLogTerm() < args.LastLogTerm {
 		reply.VoteGranted = true
 	}
+
+	log.Infof(" %d get prevote req from %d ,args's lastlogIndex:%d,my lastlogIndex:%d,islostleader: %v,isvote: %v, " +
+		"args's lastlogterm :%d , my lastlogterm : %d",
+		rf.me, args.CandidateId,args.LastLogIndex,rf.lastLogIndex(),rf.isLostLeader,reply.VoteGranted,
+			args.LastLogTerm,rf.lastLogTerm())
 	return
 }
 
@@ -143,14 +163,18 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term < rf.CurrentTerm {
 		reply.VoteGranted = false
 	}
-	if (rf.VoteFor == -1 || rf.VoteFor == args.CandidateId) && args.Term > rf.CurrentTerm && args.LastLogIndex >= rf.lastLogIndex() {
+	if (rf.VoteFor == -1 || rf.VoteFor == args.CandidateId) && args.Term > rf.CurrentTerm &&
+		((args.LastLogIndex >= rf.lastLogIndex() && args.LastLogTerm == rf.lastLogTerm()) ||
+		args.LastLogTerm > rf.lastLogTerm()){
 		rf.setIsLeader(false)
 		rf.VoteFor = args.CandidateId
 		rf.CurrentTerm = args.Term
 		reply.VoteGranted = true
 		rf.resetTimeout()
 	}
-	log.Info(rf.me, " return ", reply.VoteGranted, args.CandidateId, rf.VoteFor, args.Term, rf.CurrentTerm,args.LastLogIndex, rf.lastLogIndex())
+	log.Infof( "%d return %v for %d ,votefor:%d, args's term :%d ,current term: %d," +
+		"args's lastlogIndex: %d, my lastlogIndex, %d ",rf.me,
+		reply.VoteGranted, args.CandidateId, rf.VoteFor, args.Term, rf.CurrentTerm,args.LastLogIndex, rf.lastLogIndex())
 }
 
 //
@@ -202,31 +226,37 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 func (rf *Raft) sendAppendEntries(server int, reply *AppendEntriesReply, ch chan int,lastIndex int) bool {
 	args := rf.newAppendEntries(server,lastIndex)
 	var ok bool
-	for {
+	for i := 1 ; rf.nextIndex[server] > 0 ; i *= 2 {
 		if len(args.Entries) != 0 {
-			//log.Infof("%d start send append entry to %d, index: %d , length : %d",
-			//	rf.me, server, args.Entries[0].Index, len(args.Entries))
+			log.Infof("%d start send append entry to %d, index: %d , length : %d",
+				rf.me, server, args.Entries[0].Index, len(args.Entries))
 			//for _,v := range args.Entries{
 			//	Log.Infof("%d send to %d , cmd : %d ", rf.me, server, v.Cmd)
 			//}
 		}
 
 		ok = rf.peers[server].Call("Raft.AppendEntries", args, reply)
+		if !rf.IsLeader(){
+			break
+		}
 		if !reply.Succes && reply.Inconsistent {
 			log.Info(rf.me, "get inconsistent res from", server)
 			rf.mu.Lock()
-			rf.nextIndex[server] -= 1
+			rf.nextIndex[server] -= i
 			rf.mu.Unlock()
 			if rf.nextIndex[server] < 1 {
-				break
+				rf.nextIndex[server] = 1
 			}
 			args.Entries = rf.Log[rf.nextIndex[server]-1:]
 			args.PrevLogIndex = args.Entries[0].Index - 1
+			reply.Inconsistent = false
 		} else {
 			if reply.Succes && len(args.Entries) > 0  {
 				rf.mu.Lock()
 				rf.nextIndex[server] = args.Entries[len(args.Entries)- 1].Index + 1
 				rf.mu.Unlock()
+			}else if reply.Succes{
+				break
 			}
 			break
 		}
@@ -239,30 +269,34 @@ type rpcRes interface {
 	Success() bool
 }
 
-func gather(timeout int, res interface{}, servers int, need int, ch chan int) bool {
+func (rf *Raft) gather(timeout int, res interface{}, servers int, need int, ch chan int) bool {
 	timer := time.After(time.Duration(timeout) * time.Millisecond)
+	grantcount := 0
 	count := 0
 	for {
 		select {
 		case <-timer:
+			log.Info(rf.me,"gather timeout,get grant res",grantcount)
 			return false
 		case k := <-ch:
 			switch x := res.(type) {
 			case []*RequestVoteReply:
 				if x[k].Success() {
-					count++
+					grantcount++
 				}
 			case []*AppendEntriesReply:
 				if x[k].Success() {
-					count++
+					grantcount++
 				}
 			}
 
 		}
-		if count >= need {
+		count ++
+		if grantcount >= need {
 			return true
 		}
 		if count == servers {
+			log.Info(rf.me,"gather1111 fail,get grant res",grantcount)
 			return false
 		}
 	}

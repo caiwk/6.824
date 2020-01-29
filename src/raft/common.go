@@ -20,7 +20,5 @@ func (rf *Raft) lastLogIndex() int  {
 	return 0
 }
 func (rf *Raft) lastLog() *Entry {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	return rf.Log[rf.lastLogIndex() - 1]
 }
