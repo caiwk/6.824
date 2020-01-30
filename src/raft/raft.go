@@ -102,6 +102,7 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
+	//要做持续保存的在论文中就三个  term， votefor， log
 	rf.mu.Lock()
 	rf.mu.Unlock()
 	w := new(bytes.Buffer)
@@ -169,6 +170,8 @@ type Entry struct {
 // term. the third return value is true if this server believes it is
 // the leader.
 //
+// 每个server在测试中都有可能调用start，每次start的时候，会将log append到本地日志，并且给entryCh发送消息，
+// 会有一个groutine持续的接收是否有start传来的消息，并爸这个log replicate到其他节点上
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//index := -1
 	//term := -1
@@ -199,6 +202,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // in Kill(), but it might be convenient to (for example)
 // turn off debug output from this instance.
 //
+// 在kill的同时也要把残余的一些groutine正常退出掉
 func (rf *Raft) Kill() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -251,7 +255,7 @@ func (rf *Raft) rpcHandleLoop() {
 		select {
 		case <-rf.shutdownCh:
 			return
-		case <-rf.timeout:
+		case <-rf.timeout:// 在选举超时的话，会重新选举，但是在收到rpc请求的话，会重制timeout
 			break
 		case <-time.After(time.Duration(timeout) * time.Millisecond):
 			go func() {

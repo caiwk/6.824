@@ -62,9 +62,11 @@ func (rf *Raft) AppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 		log.Info("args.s term less than me", rf.me)
 		return
 	}
+	//通过了日志leader合法性检查，就重置超时，并更新自己的状态
 	rf.setIsLeader(false)
 	rf.resetTimeout()
 	rf.CurrentTerm = args.Term
+	//日志不一致的情况
 	if args.PrevLogIndex > 0 {
 		if args.PrevLogIndex > len(rf.Log) || rf.Log[args.PrevLogIndex-1].Index != args.PrevLogIndex {
 			reply.Succes = false
@@ -127,6 +129,7 @@ func (rf *Raft) lastLogTerm() int {
 	}
 
 }
+// prevote两个条件：1。 lost leader，2。 日志更新，满足就grant
 func (rf *Raft) PreVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -150,6 +153,7 @@ func (rf *Raft) PreVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 //
 // example RequestVote RPC handler.
 //
+// rule基本上是按照论文来的，注意是怎么定义最新的日志这个概念的
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	defer func() {
@@ -239,6 +243,7 @@ func (rf *Raft) sendAppendEntries(server int, reply *AppendEntriesReply, ch chan
 		if !rf.IsLeader(){
 			break
 		}
+		//如果收到不一致回复的话，leader会回退针对该节点的nextindex，第一次回退1，第二次回退2，以此递增，也算是小优化
 		if !reply.Succes && reply.Inconsistent {
 			log.Info(rf.me, "get inconsistent res from", server)
 			rf.mu.Lock()
@@ -251,6 +256,7 @@ func (rf *Raft) sendAppendEntries(server int, reply *AppendEntriesReply, ch chan
 			args.PrevLogIndex = args.Entries[0].Index - 1
 			reply.Inconsistent = false
 		} else {
+			//收到正确回复的话，更新每个节点的nextindex
 			if reply.Succes && len(args.Entries) > 0  {
 				rf.mu.Lock()
 				rf.nextIndex[server] = args.Entries[len(args.Entries)- 1].Index + 1
@@ -269,6 +275,7 @@ type rpcRes interface {
 	Success() bool
 }
 
+// 收集各个节点的回复，参数的意思分别是：超时时间，回复类型，一共发给了几个节点，需要几个节点的grant回复，接收管道
 func (rf *Raft) gather(timeout int, res interface{}, servers int, need int, ch chan int) bool {
 	timer := time.After(time.Duration(timeout) * time.Millisecond)
 	grantcount := 0
@@ -289,7 +296,6 @@ func (rf *Raft) gather(timeout int, res interface{}, servers int, need int, ch c
 					grantcount++
 				}
 			}
-
 		}
 		count ++
 		if grantcount >= need {
